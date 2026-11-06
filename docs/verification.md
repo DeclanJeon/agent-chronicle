@@ -65,3 +65,37 @@ GitHub 게시와 테스트 통과는 위 미완료 항목의 종결을 대신하
 두 foreground child는 daemon PID와 대조한 뒤 SIGTERM/stopped/exit0/wait로 회수했다. file-fsync 실패의 이전 cursor 보존·temp 정리, 일일 latest 게시 실패의 cursor 미진행, 부모/leaf link/FIFO/성장·UTF-8 실패를 회귀로 확인했다. 초기 typecheck의 callback 반환값 경고3개는 수정 후0이며 오류를 숨기는 suppression을 추가하지 않았다.
 
 이는 작성자 검증이지 Atlas 기술 인수/Vera 독립 QA/기본판 전체 수락은 아니다. 실제 사용자 기록·자연 OS race 빈도·reboot/power-loss는 NOT_RUN이며, file rename 뒤 directory-fsync 실패의 전원손실 상태까지 시험한 것으로 확대하지 않는다. renderer·일일 오류 구분·전체 장애 행렬과 기존 profile 분리는 여전히 별도 보강 항목이다.
+
+## 독립 QA 반환 및 readonly 보정 — `768ab09`
+
+Vera는 `7e9e64f`의 cursor/store 경계와 관련19개 독립 회귀를 확인했으나, 신선한 doctor가 `state/collector.lock`을 만드는 P2 때문에 CHANGES_REQUIRED를 반환했다. `collector_is_running()`의 mkdir/O_CREAT를 제거하고, 없으면 false인 read-only NOFOLLOW/NONBLOCK 검사로 바꿨다. 실제 held lock 감지는 유지한다.
+
+새 회귀3개는 config/state/cache/Vault 전체의 경로·모드·내용 무변경과 held lock을 확인한다. RED→GREEN 및 정확한 `768ab09`에서 전체 pytest **151 PASS +31 subtests**, basedpyright0/0/0을 확인했다. 새로운 독립 PASS를 받은 것으로 주장하지 않으며 PR1은 별도 재검토 대상이다.
+
+## resident-recording-r1 — 코드 `6dbbd70`
+
+기존 service unit이 source import 경로·선택한 설정 경로를 로그인 이후에 보존하지 못하던 문제, default.target 역방향 ordering, enable 성공과 실행 준비 완료 혼동, 제거 전 reload 순서 및 진단의 설치 부정 하드코딩을 보완했다.
+
+- Linux systemd user unit에 현재 interpreter/import/config/state/cache만 고정. 환경 전체나 OAuth/API 키를 복사하지 않는다.
+- `Type=notify` 준비 완료/최근 health, `Restart=always` 및 5초 재시도, private umask, journal 출력. 실제 stop/remove에는 재시작하지 않는다.
+- 명시 소스/확인 없이는 설치하지 않고 기존/타 profile unit과 foreground writer를 보호한다. install·재설치·restart에서 같은 single-writer 경계를 적용한다.
+- 상태의 PID/재시작 횟수/health를 제공하고 명시 restart·stop·remove 및 데이터 보존을 지원한다.
+
+### 최종 실제 시험
+
+| 검사 | 결과 |
+|---|---|
+| 관련 pytest | 28 PASS |
+| 전체 pytest | 169 PASS +31 subtests, 150.27초 |
+| basedpyright | 0 errors /0 warnings /0 notes |
+| 변경/관련 Python12파일 no-excuse | 0 violations |
+| compileall / diff 공백 | PASS |
+| 새 residency14개를 기존 `768ab09`에만 적용한 음성 대조 | 1 PASS /10 FAIL /3 ERROR: 기존 결함/없는 공개 restart를 실제 검출한 예상 비정상 결과 |
+| 최종 실제 systemd 합성 시험 | 설치/enable/notify·새 파일/append·SIGKILL 재시작·정상 신호 종료 후 재시작·degraded/복구·stop 유지·재개/replay·제거/보존 PASS |
+| 설치 경로 특수문자 | 별도 복사된 소스와 config 경로의 한글·공백·%·$·따옴표를 실제 unit에서 검증 PASS |
+
+최종 service 시나리오는 합성 이벤트6개와 기존 Markdown hash·checkpoint 개수·무중복을 확인했다. 예외적인 종료는 서비스 MainPID를 실제 확인하고 Multica daemon PID와 다름을 검증한 뒤 소유 unit에만 신호를 보냈다. 시험은 모두 전경 blocking 호출 안에서 끝났으며 종료 후 unit not-found/inactive/MainPID0, enable 링크 제거를 확인했다. 다른 서비스/사용자 매니저/OS를 재시작하지 않았다. `systemd-analyze --user verify` exit0이며 설치된 무관한 spice-vdagent unit의 기존 경고가 stderr에 있어 숨기지 않았다.
+
+초기 새 회귀 RED, 기존 service fixture를 새 필수 source opt-in/ready 결과에 맞춘 변경, 초기 타입 진단 및 167개 중간 PASS 뒤 추가한 stopped-unit/foreground 충돌2개 회귀를 보존했다. 최종169개 결과는 코드 고정 후 재실행한 결과다. helper 최종 타입 진단도0이며 초기 경고1개는 별도로 남겼다.
+
+실제 로그아웃/로그인·OS 재부팅/전원손실과 실제 사용자 로그 상주 수집은 **NOT_RUN**이다. enable 링크와 실제 supervised 재시작은 관측했지만 이를 실제 재로그인 시험이라고 하지 않는다. 임시 서비스는 제거했으며 지속 운영에는 사용자가 허용한 저장 위치·Pi 로그 범위·프로젝트 구분이 필요하다. 이 작성자 검증은 Atlas/Vera 독립 인수나 전체 기본판 승인과 별개다.
