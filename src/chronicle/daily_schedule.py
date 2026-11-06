@@ -3,12 +3,11 @@
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 import json
-import os
 from pathlib import Path
-import stat
+from typing import Final
 from zoneinfo import ZoneInfo
 
-from chronicle.atomic import atomic_replace, atomic_write_new, ensure_private_dir, require_private_directory
+from chronicle.daily_cursor_store import DailyCursorStore, open_cursor_store
 from chronicle.daily import update_daily
 from chronicle.errors import ChronicleError
 from chronicle.locking import writer_lock
@@ -16,8 +15,8 @@ from chronicle.destination import verify_vault
 from chronicle.models import CaptureContext, JsonValue
 from chronicle.schema import parse_json_object
 
-_CATCHUP_GRACE_MINUTES = 5
-_MAX_CATCHUP_DAYS = 366
+_CATCHUP_GRACE_MINUTES: Final = 5
+_MAX_CATCHUP_DAYS: Final = 366
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,29 +41,14 @@ class DailyCatchupResult:
         }
 
 
-def _state_path(vault: Path) -> Path:
-    """Return the single-host local daily catch-up cursor path."""
-    return vault / "90_System/Schedules/daily-catchup.json"
-
-
-def _read_last_attempted(path: Path) -> date | None:
-    """Read one private, schema-pinned catch-up cursor or fail closed."""
-    try:
-        info = path.lstat()
-    except FileNotFoundError:
+def _read_last_attempted(store: DailyCursorStore) -> date | None:
+    """Parse a bounded cursor already read through its pinned private directory."""
+    content = store.read_text()
+    if content is None:
         return None
-    except OSError as error:
-        raise ChronicleError("daily_schedule_error", "daily catch-up cursor cannot be inspected") from error
-    if (
-        not stat.S_ISREG(info.st_mode)
-        or info.st_uid != os.getuid()
-        or stat.S_IMODE(info.st_mode) & 0o077
-        or info.st_size > 4096
-    ):
-        raise ChronicleError("unsafe_permissions", "daily catch-up cursor is unsafe")
     try:
-        value = parse_json_object(path.read_text(encoding="utf-8"), "daily catch-up cursor")
-    except (OSError, UnicodeDecodeError, ChronicleError) as error:
+        value = parse_json_object(content, "daily catch-up cursor")
+    except ChronicleError as error:
         raise ChronicleError("daily_schedule_error", "daily catch-up cursor is unreadable") from error
     if frozenset(value) != frozenset({"schema_version", "last_attempted_date"}):
         raise ChronicleError("daily_schedule_error", "daily catch-up cursor fields are unsupported")
@@ -81,19 +65,14 @@ def _read_last_attempted(path: Path) -> date | None:
     return parsed
 
 
-def _write_last_attempted(path: Path, selected: date) -> None:
+def _write_last_attempted(store: DailyCursorStore, selected: date) -> None:
     """Atomically persist one day only after its daily update attempt completes."""
     payload = json.dumps(
         {"schema_version": 1, "last_attempted_date": selected.isoformat()},
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    if path.exists():
-        if path.is_symlink():
-            raise ChronicleError("unsafe_path", "daily catch-up cursor may not be a symbolic link")
-        atomic_replace(path, payload)
-    else:
-        atomic_write_new(path, payload)
+    store.replace(payload)
 
 
 def _latest_daily_day(vault: Path) -> date | None:
@@ -122,43 +101,61 @@ def _latest_daily_day(vault: Path) -> date | None:
     return latest
 
 
-def catch_up_daily_notes(context: CaptureContext, now: datetime | None = None) -> DailyCatchupResult:
-    """Update elapsed local dates through the five-minute daily-summary cutoff."""
-    timezone = ZoneInfo(context.config.timezone)
+def _cutoff_day(timezone_name: str, now: datetime | None) -> date:
+    """Apply the same timezone/grace rule to collection and read-only diagnosis."""
+    timezone = ZoneInfo(timezone_name)
     observed = now or datetime.now(timezone)
     if observed.tzinfo is None:
         raise ChronicleError("invalid_input", "daily catch-up time must include a timezone")
     local_now = observed.astimezone(timezone)
     days_ago = 1 if local_now.timetz().replace(tzinfo=None) >= time(0, _CATCHUP_GRACE_MINUTES) else 2
-    cutoff_day = local_now.date() - timedelta(days=days_ago)
+    return local_now.date() - timedelta(days=days_ago)
+
+
+def _check_cursor_date(last_attempted: date | None, cutoff: date) -> None:
+    """Reject an ahead cursor without clamping or silently resetting its history."""
+    if last_attempted is not None and last_attempted > cutoff:
+        raise ChronicleError("daily_schedule_error", "daily catch-up cursor is beyond the current cutoff")
+
+
+def inspect_daily_schedule(context: CaptureContext, now: datetime | None = None) -> date | None:
+    """Validate stored daily state without creating folders, locks, or daily notes."""
+    cutoff = _cutoff_day(context.config.timezone, now)
+    with open_cursor_store(context.config.vault) as store:
+        last_attempted = _read_last_attempted(store) if store is not None else None
+    _check_cursor_date(last_attempted, cutoff)
+    return last_attempted
+
+
+def catch_up_daily_notes(context: CaptureContext, now: datetime | None = None) -> DailyCatchupResult:
+    """Update elapsed local dates using one pinned cursor directory for read/write."""
+    cutoff_day = _cutoff_day(context.config.timezone, now)
     vault = verify_vault(
         context.config.vault, context.config.host_id, context.config.source_instance_id,
     )
-    schedule_dir = _state_path(vault).parent
-    ensure_private_dir(schedule_dir)
-    require_private_directory(schedule_dir)
-    cursor_path = _state_path(vault)
-    last_attempted = _read_last_attempted(cursor_path)
-    if last_attempted is not None and last_attempted > cutoff_day:
-        raise ChronicleError("daily_schedule_error", "daily catch-up cursor is beyond the current cutoff")
-    if last_attempted is None:
-        latest = _latest_daily_day(vault)
-        last_attempted = min(latest, cutoff_day - timedelta(days=1)) if latest else cutoff_day - timedelta(days=1)
-    if last_attempted >= cutoff_day:
-        return DailyCatchupResult("current", None, None, 0, 0)
-    gap_days = (cutoff_day - last_attempted).days
-    if gap_days > _MAX_CATCHUP_DAYS:
-        raise ChronicleError("daily_catchup_too_large", "daily catch-up exceeds the 366-day safety bound")
+    with open_cursor_store(vault, create=True) as store:
+        if store is None:
+            raise ChronicleError("unsafe_path", "daily cursor directory disappeared after validation")
+        last_attempted = _read_last_attempted(store)
+        _check_cursor_date(last_attempted, cutoff_day)
+        if last_attempted is None:
+            latest = _latest_daily_day(vault)
+            last_attempted = min(latest, cutoff_day - timedelta(days=1)) if latest else cutoff_day - timedelta(days=1)
+        if last_attempted == cutoff_day:
+            return DailyCatchupResult("current", None, None, 0, 0)
+        gap_days = (cutoff_day - last_attempted).days
+        if gap_days > _MAX_CATCHUP_DAYS:
+            raise ChronicleError("daily_catchup_too_large", "daily catch-up exceeds the 366-day safety bound")
 
-    first_day = last_attempted + timedelta(days=1)
-    conflicts = 0
-    attempted = 0
-    for offset in range(gap_days):
-        selected = first_day + timedelta(days=offset)
-        with writer_lock(vault):
-            result = update_daily(vault, selected, timezone_name=context.config.timezone)
-        conflicts += int(result.conflict_copy is not None)
-        _write_last_attempted(cursor_path, selected)
-        attempted += 1
-    status = "conflict" if conflicts else ("caught_up" if attempted > 1 else "updated")
-    return DailyCatchupResult(status, first_day.isoformat(), cutoff_day.isoformat(), attempted, conflicts)
+        first_day = last_attempted + timedelta(days=1)
+        conflicts = 0
+        attempted = 0
+        for offset in range(gap_days):
+            selected = first_day + timedelta(days=offset)
+            with writer_lock(vault):
+                result = update_daily(vault, selected, timezone_name=context.config.timezone)
+                _write_last_attempted(store, selected)
+            conflicts += int(result.conflict_copy is not None)
+            attempted += 1
+        status = "conflict" if conflicts else ("caught_up" if attempted > 1 else "updated")
+        return DailyCatchupResult(status, first_day.isoformat(), cutoff_day.isoformat(), attempted, conflicts)

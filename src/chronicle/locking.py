@@ -38,14 +38,23 @@ def collector_lock(state_root: Path) -> Generator[None, None, None]:
 
 
 def collector_is_running(state_root: Path) -> bool:
-    """Inspect the collector lock without waiting or changing collection state."""
-    ensure_private_dir(state_root)
+    """Observe a lock without creating directories/files, waiting, or repairing it."""
     lock_path = state_root / "collector.lock"
     try:
-        descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        descriptor = os.open(lock_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return False
     except OSError as error:
         raise ChronicleError("lock_error", "collector lock cannot be inspected") from error
     try:
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) & 0o077
+            or info.st_nlink != 1
+        ):
+            raise ChronicleError("unsafe_permissions", "collector lock cannot be safely inspected")
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:

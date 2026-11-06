@@ -1,4 +1,8 @@
-# 게시본 검증 기록
+# 검증 기록
+
+아래 초기 게시 기록은 `8a03414` 당시의 이력이며, 최신 cursor/doctor 수정 결과는 문서 마지막에 분리해 기록합니다.
+
+## 초기 공개본 `8a03414`
 
 ## 상태와 입력
 
@@ -31,3 +35,33 @@
 - 게시 시점 source에는 테스트 모듈 분리 작업이 아직 포함되지 않았을 수 있으며, 현재 진행 중인 변경과 이 고정 사본은 다르다.
 
 GitHub 게시와 테스트 통과는 위 미완료 항목의 종결을 대신하지 않는다.
+
+## cursor-doctor-r1 수정 결과
+
+범위는 cursor 경로 안전성과 doctor 정상 오표시 두 항목이다. 기존 위임 cycle 종료·활성 작성자0을 확인하고 이 한정 브랜치의 작성 책임을 Dots가 인수했다. 다른 런타임/모델 설정이나 사용자 데이터는 변경하지 않았다.
+
+### 변경
+
+- `daily_cursor_store.py`: 루트부터 NOFOLLOW 디렉터리 FD를 열고 고정 부모 FD에서 cursor를 읽고 쓴다. regular/owner/private/single-link/4KiB 검증, NONBLOCK leaf open, temp fsync→replace→directory fsync.
+- `daily_schedule.py`: 같은 FD 저장소 수명 안에서 읽기/쓰기, 일일 게시와 cursor 갱신을 같은 writer lock으로 묶고, 진단에는 생성·수리 없는 공유 검사 사용.
+- `command_collector.py`: 저장된 cursor도 실제 검사하고 실패는 attention/exit1 및 오류코드를 출력. 새 초기 상태는 정상이며 schedule 디렉터리를 만들지 않는다.
+- `daemon.py`: ready와 health를 구분하고 실제 유지 작업 실패는 degraded로 출력.
+- 새 회귀 두 파일. 기존 oversized profile·renderer·일일 요약은 변경하지 않았다.
+
+### 실행 결과
+
+| 검사 | 결과 |
+|---|---|
+| 수정 전 재현 | 최초 6개 중 3 FAIL, 부모 교체 외부 읽기와 doctor healthy/0 확인 |
+| 최종 안전 회귀의 기존 커밋 음성 대조 | 7개 중 4 FAIL. 기존 source는 수정하지 않았고 새 회귀만 적용 |
+| 관련 회귀 | 21 PASS |
+| 전체 unittest | 148 PASS |
+| 전체 pytest | 148 PASS + 31 subtests PASS |
+| basedpyright | 0 errors / 0 warnings / 0 notes |
+| 변경 Python no-excuse | 0 violations |
+| compileall / git diff --check | PASS |
+| 실제 CLI/PTY | invalid future cursor: doctor attention/exit1 + foreground degraded; 정상 fixture: healthy/exit0 + foreground healthy |
+
+두 foreground child는 daemon PID와 대조한 뒤 SIGTERM/stopped/exit0/wait로 회수했다. file-fsync 실패의 이전 cursor 보존·temp 정리, 일일 latest 게시 실패의 cursor 미진행, 부모/leaf link/FIFO/성장·UTF-8 실패를 회귀로 확인했다. 초기 typecheck의 callback 반환값 경고3개는 수정 후0이며 오류를 숨기는 suppression을 추가하지 않았다.
+
+이는 작성자 검증이지 Atlas 기술 인수/Vera 독립 QA/기본판 전체 수락은 아니다. 실제 사용자 기록·자연 OS race 빈도·reboot/power-loss는 NOT_RUN이며, file rename 뒤 directory-fsync 실패의 전원손실 상태까지 시험한 것으로 확대하지 않는다. renderer·일일 오류 구분·전체 장애 행렬과 기존 profile 분리는 여전히 별도 보강 항목이다.
