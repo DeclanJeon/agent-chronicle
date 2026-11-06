@@ -207,7 +207,7 @@ def build_parser() -> argparse.ArgumentParser:
     _ = commands.add_parser("status", help="show actual source cursors, gaps, and collector state")
     _ = commands.add_parser("doctor", help="run read-only local runtime checks")
     service = commands.add_parser("service", help="plan or explicitly manage a systemd user service")
-    _ = service.add_argument("service_action", choices=("plan", "install", "status", "stop", "remove"))
+    _ = service.add_argument("service_action", choices=("plan", "install", "status", "restart", "stop", "remove"))
     _ = service.add_argument("--preview", dest="service_preview", action="store_true")
     _ = service.add_argument("--confirm", dest="service_confirm", action="store_true")
     review = commands.add_parser("review", help="show or refresh local review backlog")

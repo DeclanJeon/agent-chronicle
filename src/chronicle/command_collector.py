@@ -21,6 +21,7 @@ from chronicle.command_runtime import json_output, load_context
 from chronicle.daemon import run_foreground
 from chronicle.daily_schedule import inspect_daily_schedule
 from chronicle.errors import ChronicleError
+from chronicle.service_unit import unit_installed
 from chronicle.locking import writer_lock
 from chronicle.project_aliases import resolve_project_id
 from chronicle.recovery import rebuild_from_markdown
@@ -132,7 +133,7 @@ def _doctor() -> int:
         "checkpoint_integrity": checkpoint_status,
         "committed_events": checkpoints,
         "collector": report["collector"],
-        "service_installation": "not_installed_by_chronicle_cli",
+        "service_installation": "installed" if unit_installed() else "not_installed",
         "external_delivery": False,
     })
     return 0 if healthy else 1
