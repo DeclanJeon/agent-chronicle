@@ -15,12 +15,12 @@ from chronicle.models import CaptureContext, JsonValue
 from chronicle.recovery import rebuild_from_markdown
 
 
-def _maintenance(context: CaptureContext) -> dict[str, JsonValue]:
-    """Catch up basic daily notes without invoking knowledge or weekly-review paths."""
+def _maintenance(context: CaptureContext) -> tuple[dict[str, JsonValue], bool]:
+    """Return the daily report and its observed failure flag, not inferred readiness."""
     try:
-        return {"daily_catchup": catch_up_daily_notes(context).as_json()}
+        return {"daily_catchup": catch_up_daily_notes(context).as_json()}, False
     except ChronicleError as error:
-        return {"daily_catchup": {"status": "failed", "error": error.code, "reviewed": False}}
+        return {"daily_catchup": {"status": "failed", "error": error.code, "reviewed": False}}, True
 
 
 def run_foreground(
@@ -41,13 +41,14 @@ def run_foreground(
         with writer_lock(vault):
             _recovery = rebuild_from_markdown(context)
         first = collect_once_locked(context)
-        maintenance = _maintenance(context)
+        maintenance, maintenance_failed = _maintenance(context)
         previous_term = signal.signal(signal.SIGTERM, stop)
         previous_interrupt = signal.signal(signal.SIGINT, stop)
         try:
             _ = output.write(json.dumps({
                 "status": "ready",
                 "collector_status": first.status,
+                "health": "degraded" if maintenance_failed or first.status == "failed" else "healthy",
                 "vault": str(vault),
                 "summary": first.as_json(),
                 "maintenance": maintenance,
@@ -55,9 +56,10 @@ def run_foreground(
             output.flush()
             while not stopped.wait(interval_seconds):
                 summary = collect_once_locked(context)
-                maintenance = _maintenance(context)
+                maintenance, maintenance_failed = _maintenance(context)
                 report = summary.as_json()
                 report["maintenance"] = maintenance
+                report["health"] = "degraded" if maintenance_failed or summary.status == "failed" else "healthy"
                 _ = output.write(json.dumps(report, sort_keys=True) + "\n")
                 output.flush()
         finally:

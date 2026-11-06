@@ -19,6 +19,7 @@ from chronicle.command_requests import (
 )
 from chronicle.command_runtime import json_output, load_context
 from chronicle.daemon import run_foreground
+from chronicle.daily_schedule import inspect_daily_schedule
 from chronicle.errors import ChronicleError
 from chronicle.locking import writer_lock
 from chronicle.project_aliases import resolve_project_id
@@ -105,10 +106,27 @@ def _doctor() -> int:
     except ChronicleError as error:
         checkpoints = 0
         checkpoint_status = error.code
+    schedule_error: str | None = None
+    last_attempted = None
+    try:
+        last_attempted = inspect_daily_schedule(context)
+    except ChronicleError as error:
+        schedule_error = error.code
+    writable = os.access(context.config.vault, os.W_OK)
+    healthy = (
+        disk_free is not None and writable and checkpoint_status == "verified"
+        and fts5 == "available" and schedule_error is None
+    )
+    schedule_status = "uninitialized" if last_attempted is None else "ready"
     json_output({
-        "status": "healthy" if disk_free is not None and os.access(context.config.vault, os.W_OK) else "attention",
+        "status": "healthy" if healthy else "attention",
+        "daily_schedule": {
+            "status": "attention" if schedule_error is not None else schedule_status,
+            "error": schedule_error,
+            "last_attempted_date": last_attempted.isoformat() if last_attempted is not None else None,
+        },
         "vault": str(context.config.vault),
-        "vault_writable": os.access(context.config.vault, os.W_OK),
+        "vault_writable": writable,
         "disk_free_bytes": disk_free,
         "sqlite_fts5": fts5,
         "checkpoint_integrity": checkpoint_status,
@@ -117,7 +135,7 @@ def _doctor() -> int:
         "service_installation": "not_installed_by_chronicle_cli",
         "external_delivery": False,
     })
-    return 0
+    return 0 if healthy else 1
 
 
 def _rebuild() -> int:
