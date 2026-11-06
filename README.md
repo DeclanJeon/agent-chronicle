@@ -3,7 +3,7 @@
 AI 에이전트의 공개 작업 기록을 **로컬 Markdown 원장**으로 보존하고, 하루 단위 정리와 검색으로 다시 찾는 CLI입니다. Obsidian은 선택 사항이며 일반 로컬 폴더에서도 동작합니다.
 
 > **상태: 개발 프리뷰 — 운영 승인/정식 릴리스가 아닙니다.**
-> 기본 기록 흐름은 구현돼 있지만 cursor의 FD 기반 경로 고정·내구 저장과 doctor/health 보강은 아직 최종 고정본 및 독립 QA 인수 전입니다. 이 저장소를 “전체 구현 완료”로 간주하지 마세요. 실제 사용자 로그를 연결하기 전 아래 제한을 확인하세요.
+> cursor의 FD 기반 no-follow 읽기·원자 저장과 doctor/health 보강은 구현하고 관련·전체 회귀를 실행했습니다. 다만 기본판 전체와 독립 QA 인수 완료는 아닙니다. 이 저장소를 “전체 구현 완료”로 간주하지 마세요. 실제 사용자 로그를 연결하기 전 아래 제한을 확인하세요.
 
 ## 현재 범위
 
@@ -123,12 +123,13 @@ python3 -m chronicle search --help
 
 - 검증 오류는 주로 exit 2, 일부 수집 실패는 exit 1로 보고됩니다.
 - **exit 0은 전체 기록 완료를 뜻하지 않습니다.** `collect`가 `pending`일 수 있고, `status`는 실패 상태를 조회하면서 0으로 끝날 수 있습니다.
-- 부모 symlink/future cursor의 기존 v012 누락 경로에는 검사 코드가 추가됐지만, FD 기준 no-follow I/O와 health/doctor 판정은 마무리 검증 대상입니다. `ready`/`healthy`만으로 일일 정리 완료를 단정하지 마세요.
+- cursor는 각 디렉터리를 no-follow FD로 열고 고정된 부모 FD에서 제한 읽기·파일 fsync·원자 교체·디렉터리 fsync를 수행합니다. 잘못된 경로/미래·손상 cursor는 `doctor`에서 `attention`/exit1로 표시합니다. `doctor`는 cursor를 자동 초기화하거나 일일 노트를 만들지 않습니다.
+- foreground의 `ready`는 시작 상태이며, 유지 작업 실패는 별도 `health=degraded`로 표시합니다. `healthy`는 관측된 저장소 검사 결과이지 모든 일일 내용·지식 기능의 완료 승인이나 모든 OS 경쟁/전원손실의 보장이 아닙니다.
 - 손상된 완결 JSONL은 원본 제공자·백업·재내보내기로 복구해야 합니다. 손상 줄을 조용히 건너뛰거나 내용을 만들어 채우지 않습니다.
 - Drive/동기화·네트워크 마운트 writer, 외부 AI/embedding/자동 export, 실제 서비스 설치·배포는 기본 사용 범위가 아닙니다.
 - `ask`의 생성 답변은 미지원/차단 상태입니다. 고급 지식·승인·관계·review/context CLI는 실험 기능이며 기본 기록판 전체 수락과 별개입니다.
 
-## 이번 게시본에서 확인한 결과
+## 초기 공개본에서 확인한 결과 — `8a03414`
 
 2026-11-07, 게시용으로 분리한 동일 소스 사본에서 실행했습니다.
 
@@ -138,6 +139,15 @@ python3 -m chronicle search --help
 - 위 결과는 기본판 안전 수정 완료나 독립 QA PASS가 아닙니다. pytest/Ruff/운영 데이터/OS 전원 손실 결과로 승계하지 않습니다.
 
 자세한 범위는 [게시본 검증 기록](docs/verification.md)을 참조하세요.
+
+## cursor·doctor 수정 검증
+
+- 관련 회귀 **21 PASS**. 기존 커밋에 새 안전 회귀만 적용한 음성 대조에서 4개 실패를 확인했습니다.
+- 전체 unittest **148 PASS**.
+- 전체 pytest **148 PASS + 31 subtests PASS**.
+- basedpyright **0 errors / 0 warnings / 0 notes**, 변경 Python 파일 no-excuse **0 violations**, compileall 및 변경 diff 공백 검사 PASS.
+- 실제 CLI: 미래 cursor에서 doctor attention/exit1·foreground degraded, 정상 합성 상태에서 doctor healthy/exit0·foreground healthy. 두 수집기는 정상 종료·회수했습니다.
+- 작성자 검증이며 독립 승인과 다릅니다. 작성자 Markdown 렌더링·일일 오류 요약 등 별도 보강 항목은 이번 두 수정의 완료로 승계하지 않습니다.
 
 ## 개발·검증
 
@@ -152,8 +162,8 @@ python3 -m compileall -q src tests
 
 ## 다음 전달 기준
 
-1. FD 기준 cursor 경로 경계와 안전한 저장.
-2. 일일 정리 실패가 드러나는 상태/doctor.
+1. FD 기준 cursor 경로 경계와 안전한 저장: 구현·작성자 회귀 완료, 독립 검토 대상.
+2. 일일 정리 실패가 드러나는 상태/doctor: 구현·작성자 회귀 완료, 독립 검토 대상.
 3. 기본 기록판 시작→추가 수집→일일→검색→종료/재시작→복구의 동일 고정본 검증.
 4. 같은 코드의 독립 QA와 한국어 실행 안내.
 
