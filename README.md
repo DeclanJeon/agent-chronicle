@@ -28,8 +28,10 @@ AI 에이전트의 공개 작업 기록을 **로컬 Markdown 원장**으로 보�
 
 다른 OS, Python 3.12의 별도 의존성 환경, 재부팅·전원 손실까지 검증했다고 주장하지 않습니다. 아래 명령은 새 패키지를 설치하지 않는 소스 실행 방식입니다.
 
+상주형 기능은 현재 [PR #2](https://github.com/DeclanJeon/agent-chronicle/pull/2) 검토 중이며 main 미병합입니다. 아래는 해당 개발판을 명시적으로 받는 방법입니다.
+
 ```bash
-git clone https://github.com/DeclanJeon/agent-chronicle.git
+git clone --branch feat/resident-recording https://github.com/DeclanJeon/agent-chronicle.git
 cd agent-chronicle
 
 python3 -c "import yaml; print(yaml.__version__)"
