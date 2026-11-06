@@ -10,13 +10,19 @@ Python 3.12 이상과 PyYAML이 준비된 환경에서 저장소를 오래 보�
 
 ```bash
 cd agent-chronicle
+export CHRONICLE_PYTHON="$(python3 -c 'import sys; print(sys.executable)')"
 export PYTHONPATH="$PWD/src"
-python3 -m chronicle init --timezone Asia/Seoul
-python3 -m chronicle sources enable \
+export CHRONICLE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/agent-chronicle"
+export CHRONICLE_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/agent-chronicle"
+export CHRONICLE_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/agent-chronicle"
+"$CHRONICLE_PYTHON" -m chronicle init --timezone Asia/Seoul
+"$CHRONICLE_PYTHON" -m chronicle sources enable \
   --source pi-jsonl-v3 --root "/수집을허용한/Pi/로그폴더" --project my-work
-python3 -m chronicle service install --preview
-python3 -m chronicle service install --confirm
+"$CHRONICLE_PYTHON" -m chronicle service install --preview
+"$CHRONICLE_PYTHON" -m chronicle service install --confirm
 ```
+
+예제는 기본 XDG 경로를 명시적으로 선택합니다. 사용자 지정 config/state/cache를 쓰려면 위 세 값을 설치 전에 원하는 절대 경로로 바꾸세요. 선택한 Python 실행 파일·소스 폴더·세 경로를 기록해 두고 새 터미널에서도 그대로 사용합니다.
 
 `init`은 저장 위치를 질문하며, 기본값은 `~/Documents/Obsidian/AgentHistory`입니다. 일반 폴더도 가능하며 Obsidian 설치는 필요하지 않습니다. source를 직접 등록하기 전에는 상주 서비스를 설치하지 않습니다. 전체 홈이나 파일시스템 루트는 허용 범위로 등록할 수 없습니다.
 
@@ -29,18 +35,31 @@ python3 -m chronicle service install --confirm
 - 기본적으로 약 1초마다 등록 범위를 다시 확인합니다. `--root` 범위에 새로 생긴 JSONL 세션과 기존 파일의 추가 레코드가 대상입니다.
 - 완전하지 않은 JSONL/UTF-8은 pending으로 기다립니다. 손상된 완결 레코드는 실패를 표시하고 임의로 건너뛰지 않습니다.
 - Markdown·체크포인트가 커밋된 진행 지점을 기준으로 재개합니다. 원본 로그가 남아 있으면 중지 중의 추가 기록도 뒤따라 수집합니다. 삭제/회전으로 사라진 바이트를 만들어 복원하지 않습니다.
-- 사실 기반 일일 정리는 고정 시간대와 00:05 유예 기준으로 지난 날짜를 처리합니다. 오늘 노트는 `python3 -m chronicle daily`로 만들 수 있습니다.
+- 사실 기반 일일 정리는 고정 시간대와 00:05 유예 기준으로 지난 날짜를 처리합니다. 오늘 노트는 아래 관리 환경을 복원한 뒤 `"$CHRONICLE_PYTHON" -m chronicle daily`로 만들 수 있습니다.
 - 프로세스가 죽거나 예기치 않게 정상 종료되어도 systemd가 5초 간격으로 재시작합니다. 영구적인 설정/디스크/입력 문제가 자동으로 고쳐진다는 뜻은 아닙니다. 반복 실패는 로그와 상태를 확인해 원인을 해결해야 합니다.
 - 명시적인 systemctl/CLI stop·remove는 재시작 정책의 예외입니다. 컴퓨터 전원 OFF/절전 중에는 수집할 수 없습니다.
 
 ## 3. 상태와 로그
 
-새 터미널에서 관리 CLI를 사용하려면 설치 폴더로 이동하고 `export PYTHONPATH="$PWD/src"`를 설정합니다. 이미 실행 중인 서비스에는 이 셸 설정이 필요하지 않습니다.
+새 터미널의 관리 CLI는 unit에 저장된 profile을 자동으로 불러오지 않습니다. **설치 당시와 같은 Python 실행 파일·소스 폴더와 세 CHRONICLE 경로를 모두 복원**해야 합니다. 아래 자리표시자를 설치 때 기록한 실제 절대 경로로 바꾸세요. 가상환경을 사용했다면 그 환경의 Python을 지정합니다. `PYTHONPATH`만 설정하는 것으로는 사용자 지정 profile을 복원할 수 없습니다.
 
 ```bash
-python3 -m chronicle service status
-python3 -m chronicle status
-python3 -m chronicle doctor
+cd "/설치당시/agent-chronicle"
+export CHRONICLE_PYTHON='/설치당시/venv/bin/python'
+export PYTHONPATH="$PWD/src"
+export CHRONICLE_CONFIG_DIR='/설치당시/config'
+export CHRONICLE_STATE_DIR='/설치당시/state'
+export CHRONICLE_CACHE_DIR='/설치당시/cache'
+```
+
+이 환경은 아래 상태 확인, 중지·재개·제거 및 설치 재실행에 공통으로 사용합니다. 기본 경로로 설치했어도 당시의 실제 경로를 사용하며, 나중에 달라진 HOME/XDG 기본값으로 대체하지 않습니다. 이미 실행 중인 서비스는 unit의 고정 환경을 사용하므로 이 셸 설정 없이도 계속 동작합니다.
+
+경로 또는 Python/소스가 다르면 `service_unit_conflict`로 제어를 거부합니다. 이는 다른 profile 보호이며 우회하거나 기존 unit을 덮어쓰지 마세요. 경로를 잊었다면 설치 기록을 먼저 확인하고, 새 기본 profile을 초기화해 대체하지 않습니다.
+
+```bash
+"$CHRONICLE_PYTHON" -m chronicle service status
+"$CHRONICLE_PYTHON" -m chronicle status
+"$CHRONICLE_PYTHON" -m chronicle doctor
 journalctl --user -u agent-chronicle.service --since today
 journalctl --user -u agent-chronicle.service -f
 ```
@@ -60,9 +79,10 @@ journalctl --user -u agent-chronicle.service -f
 ## 4. 중지, 재개, 제거
 
 ```bash
-python3 -m chronicle service stop --confirm
-python3 -m chronicle service restart --confirm
-python3 -m chronicle service remove --confirm
+# 먼저 §3의 동일 profile/실행 환경을 복원합니다.
+"$CHRONICLE_PYTHON" -m chronicle service stop --confirm
+"$CHRONICLE_PYTHON" -m chronicle service restart --confirm
+"$CHRONICLE_PYTHON" -m chronicle service remove --confirm
 ```
 
 - `stop`: 현재 실행 중지. enabled 상태는 유지합니다. 다시 시작하려면 `restart`를 사용합니다.
