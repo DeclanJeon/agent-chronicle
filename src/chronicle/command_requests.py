@@ -130,7 +130,7 @@ class KnowledgeSearchCommand:
     request: KnowledgeSearchRequest
 
 
-ServiceAction = Literal["plan", "install", "status", "stop", "remove"]
+ServiceAction = Literal["plan", "install", "status", "restart", "stop", "remove"]
 
 
 InventoryKind = Literal["home", "projects", "sessions", "documents"]

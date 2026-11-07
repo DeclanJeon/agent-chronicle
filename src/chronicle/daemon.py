@@ -13,6 +13,7 @@ from chronicle.destination import verify_vault
 from chronicle.locking import collector_lock, writer_lock
 from chronicle.models import CaptureContext, JsonValue
 from chronicle.recovery import rebuild_from_markdown
+from chronicle.service_notify import notify_service
 
 
 def _maintenance(context: CaptureContext) -> tuple[dict[str, JsonValue], bool]:
@@ -54,6 +55,7 @@ def run_foreground(
                 "maintenance": maintenance,
             }, sort_keys=True) + "\n")
             output.flush()
+            notify_service("degraded" if maintenance_failed or first.status == "failed" else "healthy", ready=True)
             while not stopped.wait(interval_seconds):
                 summary = collect_once_locked(context)
                 maintenance, maintenance_failed = _maintenance(context)
@@ -62,6 +64,8 @@ def run_foreground(
                 report["health"] = "degraded" if maintenance_failed or summary.status == "failed" else "healthy"
                 _ = output.write(json.dumps(report, sort_keys=True) + "\n")
                 output.flush()
+                notify_service("degraded" if maintenance_failed or summary.status == "failed" else "healthy")
+            notify_service("stopped", stopping=True)
         finally:
             _ = signal.signal(signal.SIGTERM, previous_term)
             _ = signal.signal(signal.SIGINT, previous_interrupt)

@@ -5,35 +5,61 @@ from pathlib import Path
 import secrets
 import stat
 import sys
+from typing import Final
 
+from chronicle.paths import environment_paths
 from chronicle.atomic import fsync_directory
 from chronicle.errors import ChronicleError
 
-SERVICE_NAME = "agent-chronicle.service"
+SERVICE_NAME: Final = "agent-chronicle.service"
+_MAX_UNIT_BYTES: Final = 65536
 
 
-def _quote_unit_argument(value: str) -> str:
-    """Quote a systemd ExecStart token and escape specifiers and delimiters."""
+def _quote_unit_argument(value: str, *, command: bool = False) -> str:
+    """Quote a unit value; ExecStart also escapes systemd's environment expansion."""
     if "\n" in value or "\r" in value:
         raise ChronicleError("invalid_service_plan", "service command contains a line break")
     escaped = value.replace("%", "%%").replace("\\", "\\\\").replace('"', '\\"')
+    if command:
+        escaped = escaped.replace("$", "$$")
     return f'"{escaped}"'
 
 
 def render_user_unit() -> str:
-    """Render a deterministic foreground daemon unit without installing it."""
-    command = " ".join(_quote_unit_argument(value) for value in (
+    """Pin the current runtime/profile without depending on a future login shell."""
+    paths = environment_paths()
+    source_root = Path(__file__).absolute().parents[1]
+    environment = {
+        "PYTHONPATH": str(source_root),
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "CHRONICLE_CONFIG_DIR": str(paths.config_dir),
+        "CHRONICLE_STATE_DIR": str(paths.state_dir),
+        "CHRONICLE_CACHE_DIR": str(paths.cache_dir),
+    }
+    environment_lines = "".join(
+        f"Environment={_quote_unit_argument(f'{key}={value}')}\n"
+        for key, value in environment.items()
+    )
+    command = " ".join(_quote_unit_argument(value, command=True) for value in (
         sys.executable, "-m", "chronicle", "daemon",
     ))
     return (
         "[Unit]\n"
         "Description=Agent Chronicle local foreground collector\n"
-        "After=default.target\n\n"
+        "StartLimitIntervalSec=0\n\n"
         "[Service]\n"
-        "Type=simple\n"
+        "Type=notify\n"
+        "NotifyAccess=main\n"
+        f"{environment_lines}"
         f"ExecStart={command}\n"
-        "Restart=on-failure\n"
+        "Restart=always\n"
         "RestartSec=5\n"
+        "TimeoutStartSec=120\n"
+        "TimeoutStopSec=30\n"
+        "UMask=0077\n"
+        "StandardOutput=journal\n"
+        "StandardError=journal\n"
         "NoNewPrivileges=true\n"
         "PrivateTmp=true\n\n"
         "[Install]\n"
@@ -74,7 +100,7 @@ def _prepare_unit_directory(path: Path) -> None:
 def read_existing_unit(path: Path) -> bytes:
     """Read one owner-controlled regular unit without following symlinks."""
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError as error:
         raise ChronicleError("service_unit_error", "existing service unit cannot be opened") from error
     try:
@@ -83,11 +109,16 @@ def read_existing_unit(path: Path) -> bytes:
             not stat.S_ISREG(entry.st_mode)
             or entry.st_uid != os.getuid()
             or stat.S_IMODE(entry.st_mode) & 0o022
+            or entry.st_nlink != 1
+            or entry.st_size > _MAX_UNIT_BYTES
         ):
             raise ChronicleError("unsafe_permissions", "existing service unit is not safely owned")
         with os.fdopen(descriptor, "rb") as stream:
             descriptor = -1
-            return stream.read()
+            content = stream.read(_MAX_UNIT_BYTES + 1)
+            if len(content) > _MAX_UNIT_BYTES:
+                raise ChronicleError("unsafe_permissions", "existing service unit exceeds its size bound")
+            return content
     except OSError as error:
         raise ChronicleError("service_unit_error", "existing service unit cannot be read") from error
     finally:
