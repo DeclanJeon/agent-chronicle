@@ -76,12 +76,28 @@ def installed_profile() -> Generator[InstalledProfile, None, None]:
         yield InstalledProfile(root, MappingProxyType(environment), unit, calls)
 
 
-def _fresh_management(profile: InstalledProfile, action: str, *, restore: bool = True) -> subprocess.CompletedProcess[str]:
-    """Execute actual documented exports with fixture paths, never the user's manager."""
-    document = (PROJECT_ROOT / "docs/resident-service.md").read_text(encoding="utf-8")
-    section = document.split("## 3.", maxsplit=1)[1].split("## 4.", maxsplit=1)[0]
+def _management_setup(document: Path) -> str:
+    """Use local instructions when present; otherwise follow the README's guide link."""
+    text = document.read_text(encoding="utf-8")
+    if document.samefile(PROJECT_ROOT / "README.md"):
+        section = text.split("## 상주형 설치:", maxsplit=1)[1].split("\n## ", maxsplit=1)[0]
+        local_commands = re.search(r"\bchronicle\s+service\s+(?:install|restart|stop|remove)\b", section)
+        if local_commands is None:
+            guide = re.search(r"\]\((docs/[^)#]+)(?:#[^)]*)?\)", section)
+            assert guide is not None, "README management route has no local guide target"
+            target = (PROJECT_ROOT / guide.group(1)).resolve()
+            assert target.is_relative_to(PROJECT_ROOT)
+            return _management_setup(target)
+    else:
+        section = text.split("## 3.", maxsplit=1)[1].split("## 4.", maxsplit=1)[0]
     exports = re.findall(r"(?:^|`)(export [^\n`]+)", section, flags=re.MULTILINE)
-    script = "set -eu\ncd " + shlex.quote(str(PROJECT_ROOT)) + "\n" + "\n".join(exports)
+    return "\n".join(exports)
+
+
+def _fresh_management(profile: InstalledProfile, action: str, *, setup: str | None = None) -> subprocess.CompletedProcess[str]:
+    """Execute actual documented exports with fixture paths, never the user's manager."""
+    recipe = _management_setup(PROJECT_ROOT / "docs/resident-service.md") if setup is None else setup
+    script = "set -eu\ncd " + shlex.quote(str(PROJECT_ROOT)) + "\n" + recipe
     replacements = {
         "/설치당시/venv/bin/python": sys.executable,
         "/설치당시/config": profile.environment["CHRONICLE_CONFIG_DIR"],
@@ -90,8 +106,6 @@ def _fresh_management(profile: InstalledProfile, action: str, *, restore: bool =
     }
     for placeholder, value in replacements.items():
         script = script.replace(placeholder, value)
-    if not restore:
-        script += "\nunset CHRONICLE_CONFIG_DIR CHRONICLE_STATE_DIR CHRONICLE_CACHE_DIR"
     script += '\nexec "${CHRONICLE_PYTHON:-python3}" -m chronicle service ' + shlex.quote(action) + " --confirm"
     fresh = {
         key: value for key, value in profile.environment.items()
@@ -104,11 +118,12 @@ def _fresh_management(profile: InstalledProfile, action: str, *, restore: bool =
     )
 
 
+@pytest.mark.parametrize("entry", ["docs/resident-service.md", "README.md"])
 @pytest.mark.parametrize("action", ["restart", "stop", "remove", "install"])
-def test_documented_fresh_terminal_manages_the_selected_profile(installed_profile: InstalledProfile, action: str) -> None:
+def test_documented_fresh_terminal_manages_the_selected_profile(installed_profile: InstalledProfile, action: str, entry: str) -> None:
     # Given a custom-path installation and a fresh shell without its three roots.
     # When the documentation's executable exports precede the real CLI action.
-    result = _fresh_management(installed_profile, action)
+    result = _fresh_management(installed_profile, action, setup=_management_setup(PROJECT_ROOT / entry))
     # Then the selected unit is managed successfully, not rejected as foreign.
     assert result.returncode == 0, result.stdout + result.stderr
     report = json_object(decode_json(result.stdout))
@@ -122,7 +137,11 @@ def test_missing_profile_roots_refuse_before_systemctl(installed_profile: Instal
     # Given the same unit but intentionally omitted profile roots.
     before = installed_profile.unit.read_bytes()
     # When a fresh CLI tries to control the unit without the required exports.
-    result = _fresh_management(installed_profile, action, restore=False)
+    setup = _management_setup(PROJECT_ROOT / "docs/resident-service.md")
+    result = _fresh_management(
+        installed_profile, action,
+        setup=setup + "\nunset CHRONICLE_CONFIG_DIR CHRONICLE_STATE_DIR CHRONICLE_CACHE_DIR",
+    )
     # Then the ownership guard still refuses without contacting any manager.
     assert result.returncode == 2
     assert "service_unit_conflict" in result.stdout + result.stderr

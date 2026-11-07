@@ -43,34 +43,15 @@ PyYAML이 없다면 환경 준비가 필요합니다. 이 프로젝트의 에이
 
 ## 상주형 설치: 처음 한 번 설정
 
-위 소스 실행 준비 후 **계속 보관할 설치 폴더**에서 실행합니다. 저장 위치와 읽어도 되는 Pi 로그 폴더는 직접 지정합니다. 의존성 설치와 실제 로그 수집에 앞서 아래 개발 프리뷰 제한을 확인하세요.
+설치와 새 터미널의 관리 명령은 **[상주 서비스 안내](docs/resident-service.md) 한 곳의 절차**를 사용합니다. §1에서 계속 보관할 설치 폴더·Python·config/state/cache 경로를 선택하고 저장 위치와 읽어도 되는 Pi 로그 범위를 직접 지정하세요. §3에서 설치 당시의 실행 환경을 복원한 뒤 §4의 중지·재개·제거 명령을 실행합니다. README에 별도 명령 사본을 두지 않습니다.
 
-```bash
-export PYTHONPATH="$PWD/src"
-# 터미널에서 저장 위치를 질문합니다. 일반 폴더도 가능합니다.
-python3 -m chronicle init --timezone Asia/Seoul
-python3 -m chronicle sources enable \
-  --source pi-jsonl-v3 --root "/선택한/Pi/세션폴더" --project my-work
-
-python3 -m chronicle service install --preview
-# 확인 후: 즉시 시작 + 사용자 로그인 시 자동 시작 설정
-python3 -m chronicle service install --confirm
-python3 -m chronicle service status
-```
+설치를 확인하면 즉시 수집과 로그인 자동 시작 설정이 시작됩니다. 의존성 설치·실제 로그 수집에 앞서 아래 개발 프리뷰 제한을 확인하세요.
 
 - `--root`로 등록한 범위의 새 JSONL 세션과 추가 내용을 지속 수집합니다. 로그가 남아 있으면 중지 중 쌓인 내용도 재시작 후 따라잡습니다.
-- 서비스는 설치 시 Python 실행 파일·소스 위치·config/state/cache 위치를 고정합니다. 이후 터미널을 켜거나 `PYTHONPATH`를 다시 export할 필요 없이 실행됩니다. **설치 폴더/Python 환경을 삭제하거나 이동하지 마세요.** 관리 CLI를 새 터미널에서 쓸 때에는 설치 폴더에서 위 `PYTHONPATH`를 다시 설정합니다.
+- 서비스는 설치 시 Python 실행 파일·소스 위치·config/state/cache 위치를 고정하므로 실행 중인 서비스는 새 셸 설정 없이 계속 동작합니다. **설치 폴더/Python 환경을 삭제하거나 이동하지 마세요.** 반면 새 터미널의 관리 CLI는 같은 Python/소스와 기록한 `CHRONICLE_CONFIG_DIR`·`CHRONICLE_STATE_DIR`·`CHRONICLE_CACHE_DIR` 세 경로를 모두 복원해야 합니다. `PYTHONPATH`만 설정해서는 사용자 지정 profile이 복원되지 않습니다.
 - `Type=notify` 준비 완료 뒤 시작 성공을 확인합니다. `status`의 프로세스 상태, `health`, PID, 재시작 횟수는 서로 다른 정보입니다. 입력 오류는 degraded로 표시하고 재시도하며 손상 줄을 조용히 건너뛰지 않습니다.
 - 프로세스가 예기치 않게 끝나면 5초 간격으로 다시 시작합니다. **명시적인 stop/remove에는 자동 재시작하지 않습니다.** `stop`은 로그인 자동 시작 설정을 보존하고, `remove`는 해제합니다.
 - sudo/cron/별도 상주 셸은 필요 없습니다. 사용자 systemd manager가 필요하며 로그인 전 부팅 실행·로그아웃 후 보장은 하지 않습니다. linger를 자동 변경하지 않습니다.
-
-```bash
-python3 -m chronicle service status
-journalctl --user -u agent-chronicle.service -f
-python3 -m chronicle service restart --confirm
-python3 -m chronicle service stop --confirm
-python3 -m chronicle service remove --confirm  # 자동 시작 해제, 기록/설정은 보존
-```
 
 이미 수집기가 실행 중이면 중복 실행하지 않습니다. 다른 profile/runtime의 기존 unit은 덮어쓰거나 중지하지 않습니다. 실패 시 `service status`와 journal을 확인하세요. 상세 동작·운영 한계는 [상주 서비스 안내](docs/resident-service.md)에 있습니다.
 
@@ -126,7 +107,7 @@ python3 -m chronicle search --query "합성기록" --project demo-history
 python3 -m chronicle collect --interval-seconds 1
 ```
 
-**Ctrl+C**로 정지합니다. 같은 설정과 같은 소스로 다시 실행하면 이어 수집합니다. 이 foreground 명령 자체는 서비스 등록이나 자동 시작 설정을 하지 않습니다. 상주 운영은 위 `service install --confirm`을 사용하세요.
+**Ctrl+C**로 정지합니다. 같은 설정과 같은 소스로 다시 실행하면 이어 수집합니다. 이 foreground 명령 자체는 서비스 등록이나 자동 시작 설정을 하지 않습니다. 상주 설치·관리는 [상주 서비스 안내](docs/resident-service.md)의 동일 profile 절차를 사용하세요.
 
 ### 주요 명령
 
